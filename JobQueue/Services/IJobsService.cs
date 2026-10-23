@@ -8,7 +8,11 @@ namespace JobQueue.Services
         Task<IEnumerable<Job>> GetAllJobsAsync();
         Task<Job?> GetJobByIdAsync(int id);
         Task<Job> CreateJobAsync(CreateJobDto jobDto);
-        Task<Job?> GetNextPendingJobAsync(int maxRetries);
-        Task<bool> UpdateJobStatusAsync(int id, JobStatus newStatus, string? errorMessage);
+        Task<Job?> GetNextJobForProcessingAsync(int maxRetries, TimeSpan lockTimeout);
+        Task<bool> MarkJobAsProcessingAsync(Job job);
+        Task<bool> UpdateJobStatusWithBackoffAsync(int id, JobStatus newStatus, string? errorMessage, int currentAttempts);
+
+        Task CleanUpAbandonedJobsAsync(int maxRetries, TimeSpan lockTimeout);
+
     }
 }

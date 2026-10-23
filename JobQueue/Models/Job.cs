@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.SignalR.Protocol;
+using System.ComponentModel.DataAnnotations;
 
 namespace JobQueue.Models
 {
@@ -17,5 +18,13 @@ namespace JobQueue.Models
         public string? Errors { get; set; }
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+
+
+        public DateTime? ClaimedAt { get; set; }
+        public DateTime ProcessAfter { get; set; } = DateTime.UtcNow;
+
+        [Timestamp]
+        public byte[] RowVersion { get; set; } = Array.Empty<byte>();
     }
 }

@@ -8,6 +8,7 @@ namespace JobQueue.Workers
         private readonly IServiceProvider _serviceProvider;
         private readonly ILogger<JobProcessingWorker> _logger;
         private readonly int _maxRetries;
+        private readonly TimeSpan _lockTimeout = TimeSpan.FromMinutes(5);
 
         public JobProcessingWorker(IServiceProvider serviceProvider, ILogger<JobProcessingWorker> logger, IConfiguration configuration)
         {
@@ -30,19 +31,27 @@ namespace JobQueue.Workers
                     {
                         var jobsService = scope.ServiceProvider.GetRequiredService<IJobsService>();
 
-                        var pendingJob = await jobsService.GetNextPendingJobAsync(_maxRetries);
+                        await jobsService.CleanUpAbandonedJobsAsync(_maxRetries, _lockTimeout);
+
+                        var pendingJob = await jobsService.GetNextJobForProcessingAsync(_maxRetries, _lockTimeout);
 
                         if (pendingJob != null)
                         {
+                            bool claimed = await jobsService.MarkJobAsProcessingAsync(pendingJob);
+
+                            if (!claimed)
+                            {
+                                jobProcessed = true;
+                                continue;
+                            }
+
                             jobProcessed = true;
                             _logger.LogInformation("Processing Job ID {Id} ({Type}).", pendingJob.Id, pendingJob.Type);
 
-                            await jobsService.UpdateJobStatusAsync(pendingJob.Id, JobStatus.Processing, null);
-
                             try
                             {
-                                await SimulatedJobExecutor(pendingJob);
-                                await jobsService.UpdateJobStatusAsync(pendingJob.Id, JobStatus.Completed, null);
+                                await SimulatedJobExecutor(pendingJob, stoppingToken);
+                                await jobsService.UpdateJobStatusWithBackoffAsync(pendingJob.Id, JobStatus.Completed, null, pendingJob.Attempts);
                                 _logger.LogInformation("Completed Job ID {Id}.", pendingJob.Id);
                             }
                             catch (Exception taskEx)
@@ -51,13 +60,13 @@ namespace JobQueue.Workers
 
                                 if (pendingJob.Attempts >= _maxRetries)
                                 {
-                                    await jobsService.UpdateJobStatusAsync(pendingJob.Id, JobStatus.Failed, taskEx.Message);
+                                    await jobsService.UpdateJobStatusWithBackoffAsync(pendingJob.Id, JobStatus.Failed, taskEx.Message, pendingJob.Attempts);
                                     _logger.LogError("Job ID {Id} moved to Dead-Letter status.", pendingJob.Id);
                                 }
                                 else
                                 {
-                                    await jobsService.UpdateJobStatusAsync(pendingJob.Id, JobStatus.Pending, taskEx.Message);
-                                    _logger.LogInformation("Job ID {Id} reset to Pending.", pendingJob.Id);
+                                    await jobsService.UpdateJobStatusWithBackoffAsync(pendingJob.Id, JobStatus.Pending, taskEx.Message, pendingJob.Attempts);
+                                    _logger.LogInformation("Job ID {Id} reset to Pending with backoff delay.", pendingJob.Id);
                                 }
                             }
                         }
@@ -72,14 +81,22 @@ namespace JobQueue.Workers
                 {
                     await Task.Delay(5000, stoppingToken);
                 }
+                else
+                {
+                    await Task.Delay(100, stoppingToken);
+                }
             }
 
             _logger.LogInformation("Job Processing Engine stopped.");
         }
 
-        private async Task SimulatedJobExecutor(Job job)
+        private async Task SimulatedJobExecutor(Job job, CancellationToken cancellationToken)
         {
-            await Task.Delay(3000);
+            for (int i = 0; i < 3; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await Task.Delay(1000, cancellationToken);
+            }
 
             if (job.Type.Contains("Fail", StringComparison.OrdinalIgnoreCase))
             {
