@@ -10,7 +10,7 @@ namespace JobQueue.Data
         public JobQueueDbContext(DbContextOptions<JobQueueDbContext> options) : base(options)
         {
         }
-        public DbSet<Jobs> Jobs { get; set; }
+        public DbSet<Job> Jobs { get; set; }
     }
 
 }

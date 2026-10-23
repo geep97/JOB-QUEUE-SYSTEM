@@ -2,7 +2,7 @@
 
 namespace JobQueue.Models
 {
-    public class Jobs
+    public class Job
     {
 
         public int Id { get; set; }
