@@ -3,6 +3,7 @@
 using Microsoft.EntityFrameworkCore;
 using JobQueue.Data;
 using JobQueue.Services;
+using JobQueue.Workers;
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -25,6 +26,8 @@ builder.Services.AddOpenApi();
 builder.Services.AddSwaggerGen();
 
 builder.Services.AddScoped<IJobsService, JobsService>();
+
+builder.Services.AddHostedService<JobProcessingWorker>();
 
 
 var app = builder.Build();
