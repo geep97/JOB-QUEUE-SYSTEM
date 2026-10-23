@@ -11,5 +11,7 @@ namespace JobQueue.Services
         Task<IEnumerable<Jobs>> GetAllJobsAsync();
         Task<Jobs?> GetJobByIdAsync(int id);
 
+        Task<bool> UpdateJobStatusAsync(int id, JobStatus newStatus, string? errorMessage = null);
+
     }
 }

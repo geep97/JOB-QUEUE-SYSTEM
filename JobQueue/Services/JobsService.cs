@@ -33,5 +33,30 @@ namespace JobQueue.Services
         {
             return await _context.Jobs.FindAsync(id);
         }
+
+
+        public async Task<bool> UpdateJobStatusAsync(int id, JobStatus newStatus, string? errorMessage = null)
+        {
+            var job = await _context.Jobs.FindAsync(id);
+            if (job == null)
+            {
+                return false;
+            }
+            job.Status = newStatus;
+
+
+            if (!String.IsNullOrEmpty(errorMessage))
+            {
+                job.Errors = errorMessage;
+            }
+
+
+            if (newStatus == JobStatus.InProgress)
+            {
+                job.Attempts += 1;
+            }
+            await _context.SaveChangesAsync();
+            return true;
+        }
     }
 }

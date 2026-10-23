@@ -43,6 +43,18 @@ namespace JobQueue.Controllers
             }
             return Ok(job);
         }
+
+
+        [HttpPut("{id}/status")])]
+        public async Task<IActionResult> UpdateJobStatus(int id, [FromBody] UpdateJobStatusDto updateJobStatusDto)
+        {
+            var success = await _jobsService.UpdateJobStatusAsync(id, updateJobStatusDto.Status, updateJobStatusDto.ErrorMessage);
+            if (!success)
+            {
+                return NotFound();
+            }
+            return NoContent();
+        }
     }
 
 }
