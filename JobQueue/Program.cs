@@ -1,6 +1,9 @@
 
 
 using Microsoft.EntityFrameworkCore;
+using JobQueue.Data;
+using JobQueue.Services;
+
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -19,6 +22,10 @@ builder.Services.AddDbContext<JobQueueDbContext>(options =>
 builder.Services.AddControllers();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+builder.Services.AddSwaggerGen();
+
+builder.Services.AddScoped<IJobsService, JobsService>();
+
 
 var app = builder.Build();
 
@@ -26,6 +33,8 @@ var app = builder.Build();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    app.UseSwagger();
+    app.UseSwaggerUI();
 }
 
 app.UseHttpsRedirection();

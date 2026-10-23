@@ -2,10 +2,15 @@
 using JobQueue.Models;
 
 
-public class JobQueueDbContext : DbContext
+namespace JobQueue.Data
 {
-    public JobQueueDbContext(DbContextOptions<JobQueueDbContext> options) : base(options)
+
+    public class JobQueueDbContext : DbContext
     {
+        public JobQueueDbContext(DbContextOptions<JobQueueDbContext> options) : base(options)
+        {
+        }
+        public DbSet<Jobs> Jobs { get; set; }
     }
-    public DbSet<Jobs> Jobs { get; set; }
+
 }
