@@ -32,7 +32,7 @@ builder.Services.AddSwaggerGen();
 
 builder.Services.AddScoped<IJobsService, JobsService>();
 
-builder.Services.AddScoped<RabbitMqPublisher>();
+builder.Services.AddSingleton<RabbitMqPublisher>();
 
 builder.Services.AddSingleton<RabbitMqConsumer>();
 

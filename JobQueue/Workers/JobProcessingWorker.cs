@@ -48,6 +48,10 @@ namespace JobQueue.Workers
                                 notifiedJobId,
                                 _maxRetries,
                                 _lockTimeout);
+
+                            _logger.LogInformation(
+                           "Received job notification from RabbitMQ for Job ID {Id}.",
+                           notifiedJobId);
                         }
 
                        
