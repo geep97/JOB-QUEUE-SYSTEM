@@ -1,0 +1,31 @@
+
+name: JobQueue CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test-docker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore dependencies
+        run: dotnet restore JobQueue/JobQueue.csproj
+
+      - name: Build API
+        run: dotnet build JobQueue/JobQueue.csproj --configuration Release --no-restore
+
+      - name: Run tests
+        run: dotnet test JobQueue/JobQueue.Tests/JobQueue.Tests.csproj --configuration Release
+
+      - name: Build Docker image
+        run: docker build -t jobqueue-api -f JobQueue/Dockerfile JobQueue
