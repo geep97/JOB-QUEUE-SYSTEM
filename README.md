@@ -1,504 +1,286 @@
-\# Job Queue System
+<h1 align="center">Job Queue System</h1>
 
+<p align="center">
+  A background-job service built with ASP.NET Core, PostgreSQL and RabbitMQ.<br/>
+  Retries with backoff · crash recovery · safe concurrent workers · health checks and metrics
+</p>
 
+<p align="center">
+  <img alt=".NET 10" src="https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white">
+  <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-Neon-4169E1?logo=postgresql&logoColor=white">
+  <img alt="RabbitMQ" src="https://img.shields.io/badge/RabbitMQ-CloudAMQP-FF6600?logo=rabbitmq&logoColor=white">
+  <img alt="Docker" src="https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white">
+  <a href="https://github.com/geep97/JOB-QUEUE-SYSTEM/actions"><img alt="CI" src="https://github.com/geep97/JOB-QUEUE-SYSTEM/actions/workflows/ci.yml/badge.svg"></a>
+</p>
 
-A backend job queue API built with \*\*ASP.NET Core (.NET 10)\*\*, PostgreSQL, RabbitMQ, and background processing. The system provides endpoints for creating, retrieving, and updating jobs while supporting observability and health monitoring.
+<p align="center">
+  <a href="https://jobqueue-api.onrender.com/swagger"><b>Live demo (Swagger)</b></a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#how-a-job-is-processed">How it works</a> ·
+  <a href="#design-decisions">Design decisions</a> ·
+  <a href="#known-limitations">Limitations</a>
+</p>
 
+---
 
+## Why this project
 
-\## Live Demo
+Slow work such as sending an email or syncing data should not block an API request. This service accepts a job, stores it, and returns immediately. A background worker then processes it, and the system has to keep that promise when workers crash, restart, run in parallel, or fail.
 
+The point of the project is not the API. It is the failure handling around it.
 
+## Highlights
 
-\- \*\*API Base URL:\*\* https://jobqueue-api.onrender.com
+- **Fast, non-blocking API.** `POST /api/Jobs` stores the job and returns `201 Created` with the job ID.
+- **RabbitMQ notifications** with a durable queue, so workers hear about new jobs without constantly asking the database.
+- **Retries with backoff.** Failed jobs wait longer before each new attempt, and give up after a configurable number of attempts.
+- **Crash recovery.** A job abandoned mid-run by a dead worker is picked up again, or marked `Failed` if it has no attempts left.
+- **Safe concurrent workers.** Optimistic concurrency stops two workers from processing the same job.
+- **Graceful shutdown.** A job interrupted by a deployment is returned to the queue without using up one of its attempts.
+- **Production basics.** Health checks, Prometheus metrics, structured logs, Docker, and CI.
 
-\- \*\*Swagger UI:\*\* https://jobqueue-api.onrender.com/swagger
+## Architecture
 
-\- \*\*Health Check:\*\* https://jobqueue-api.onrender.com/health
+```mermaid
+flowchart LR
+    C([Client]) -->|"POST /api/Jobs"| API["ASP.NET Core API"]
+    API -->|"1. save job as Pending"| DB[("PostgreSQL<br/>(Neon)")]
+    API -->|"2. publish job id"| MQ{{"RabbitMQ<br/>durable job-queue"}}
+    MQ -->|"deliver job id"| CON["Consumer"]
+    CON --> CH["JobNotificationChannel"]
+    CH --> W["JobProcessingWorker"]
+    DB -. "polling fallback" .-> W
+    W -->|"claim, run, update status"| DB
+```
 
-\- \*\*Database Readiness:\*\* https://jobqueue-api.onrender.com/health/ready
+- **PostgreSQL is the source of truth.** Status, attempts, errors and timestamps all live there.
+- **RabbitMQ carries only a signal** (the job ID), so the broker never holds data that the database does not.
+- **The worker keeps a polling fallback.** If a message is lost or never published, the job is still found and processed.
 
-\- \*\*Metrics:\*\* https://jobqueue-api.onrender.com/metrics
+## How a job is processed
 
+```mermaid
+stateDiagram-v2
+    [*] --> Pending: POST /api/Jobs
+    Pending --> InProgress: worker claims job (attempt + 1)
+    InProgress --> Completed: success
+    InProgress --> Pending: failure with attempts left (backoff delay)
+    InProgress --> Failed: failure with no attempts left
+    InProgress --> Pending: graceful shutdown (attempt returned)
+    InProgress --> InProgress: stale claim recovered after a crash
+    InProgress --> Failed: stale claim with no attempts left
+    Completed --> [*]
+    Failed --> [*]
+```
 
-
-> The API is hosted on Render, and PostgreSQL is hosted on Neon. The free hosting instance may take some time to respond after periods of inactivity.
-
-
-
-\## Features
-
-
-
-\- Create and retrieve jobs through REST API endpoints.
-
-\- Retrieve individual jobs by ID.
-
-\- Update job statuses.
-
-\- Persist job data using PostgreSQL.
-
-\- Integrate RabbitMQ for messaging.
-
-\- Run background job processing using a hosted worker.
-
-\- Track job attempts, errors, timestamps, and processing information.
-
-\- Use GUID-based row versions for concurrency tracking.
-
-\- Monitor application health and database connectivity.
-
-\- Expose application metrics through OpenTelemetry and Prometheus.
-
-\- Use structured logging with Serilog.
-
-\- Run automated tests and Docker builds through GitHub Actions.
-
-
-
-\## Tech Stack
-
-
-
-| Technology | Purpose |
-
+| Rule | Behavior |
 |---|---|
+| Maximum attempts | Configurable through `JobQueueSettings:MaxRetries` (default `3`) |
+| Backoff | Increasing delay after each failure, stored in `ProcessAfter` |
+| Dead-letter state | A job that exhausts its attempts ends as `Failed`, with the last error kept in `errors` |
+| Stale claims | A job stuck in `InProgress` past the lock timeout is treated as abandoned by a crashed worker |
+| Shutdown | An interrupted job goes back to `Pending` and does not lose an attempt or record a fake error |
+| Delivery guarantee | **At-least-once.** A job can run more than once, so handlers must be safe to repeat |
 
-| C# | Primary programming language |
+## Design decisions
 
-| ASP.NET Core / .NET 10 | REST API |
+| Decision | Why |
+|---|---|
+| Database holds the truth, broker holds a signal | One place to look for state, and a lost message cannot lose a job |
+| Optimistic concurrency (row version) instead of locks | Workers never block each other, and a collision simply makes one worker skip the job |
+| Keep polling alongside RabbitMQ | Covers missed messages while the system has no transactional outbox |
+| Separate "job failed" from "app is shutting down" | Deployments must not eat a job's retry budget |
+| Backoff on retry | Hammering a failing dependency three times in a row rarely helps |
+| Controller → service → repository layering | Rules can change without touching HTTP or storage code, and are easy to test |
+| Scoped database context per worker iteration | A long-lived worker must not hold one short-lived `DbContext` forever |
 
-| Entity Framework Core | Database access and migrations |
+## Tech stack
 
-| PostgreSQL | Persistent data storage |
+| Area | Technology |
+|---|---|
+| Language and framework | C#, ASP.NET Core, .NET 10 |
+| Data | Entity Framework Core, Npgsql, PostgreSQL on Neon |
+| Messaging | RabbitMQ on CloudAMQP |
+| Observability | Serilog, OpenTelemetry, Prometheus exporter |
+| Quality | xUnit, GitHub Actions |
+| Delivery | Docker (multi-stage image), Render |
+| Docs | Swagger / OpenAPI |
 
-| Neon | Managed PostgreSQL hosting |
-
-| RabbitMQ | Messaging |
-
-| Docker | Containerization |
-
-| OpenTelemetry | Metrics and observability |
-
-| Prometheus | Metrics scraping |
-
-| Serilog | Structured logging |
-
-| Swagger / OpenAPI | API documentation and testing |
-
-| xUnit | Automated testing |
-
-| GitHub Actions | Continuous integration |
-
-| Render | API deployment |
-
-
-
-\## API Endpoints
-
-
-
-Base URL:
-
-
-
-`https://jobqueue-api.onrender.com`
-
-
+## API
 
 | Method | Endpoint | Description |
-
 |---|---|---|
-
 | `POST` | `/api/Jobs` | Create a job |
-
-| `GET` | `/api/Jobs` | Retrieve jobs |
-
-| `GET` | `/api/Jobs/{id}` | Retrieve a job by ID |
-
+| `GET` | `/api/Jobs` | List jobs |
+| `GET` | `/api/Jobs/{id}` | Get one job |
 | `PUT` | `/api/Jobs/{id}/status` | Update a job's status |
+| `GET` | `/health` | Liveness check |
+| `GET` | `/health/ready` | Readiness check (database connection) |
+| `GET` | `/metrics` | Prometheus metrics |
 
-| `GET` | `/health` | Check API health |
+**Status values**
 
-| `GET` | `/health/ready` | Check database connectivity |
+| Value | Meaning |
+|---|---|
+| `0` | Pending |
+| `1` | InProgress |
+| `2` | Completed |
+| `3` | Failed |
 
-| `GET` | `/metrics` | Expose application metrics |
-
-
-
-For interactive API documentation, visit the \[Swagger UI](https://jobqueue-api.onrender.com/swagger).
-
-
-
-\## Getting Started
-
-
-
-\### Prerequisites
-
-
-
-Install the following:
-
-
-
-\- \[.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-
-\- \[Git](https://git-scm.com/)
-
-\- \[Docker Desktop](https://www.docker.com/products/docker-desktop/)
-
-\- A PostgreSQL database
-
-\- A RabbitMQ instance
-
-
-
-\### 1. Clone the repository
-
-
+### Example
 
 ```bash
-
-git clone https://github.com/geep97/JOB-QUEUE-SYSTEM.git
-
-cd JOB-QUEUE-SYSTEM
-
+curl -X POST https://jobqueue-api.onrender.com/api/Jobs \
+  -H "Content-Type: application/json" \
+  -d '{"type":"NormalJob","payload":"Email"}'
 ```
 
+```json
+{
+  "id": 1,
+  "type": "NormalJob",
+  "payload": "Email",
+  "status": 0,
+  "attempts": 0,
+  "errors": null,
+  "createdAt": "2026-10-24T15:19:56.6709014Z",
+  "claimedAt": null,
+  "processAfter": "2026-10-24T15:19:56.6709222Z",
+  "rowVersion": "c74bdf9c-8f77-4785-b146-00a1a2d77464"
+}
+```
 
-
-\### 2. Configure environment variables
-
-
-
-Configure the following application settings before running the API:
-
-
-
-| Environment variable | Description |
-
-|---|---|
-
-| `ConnectionStrings\_\_DefaultConnection` | PostgreSQL connection string |
-
-| `RabbitMq\_\_Url` | RabbitMQ connection URL |
-
-
-
-For local development, use .NET User Secrets to store sensitive values:
-
-
+Then check on it:
 
 ```bash
+curl https://jobqueue-api.onrender.com/api/Jobs/1
+```
 
+> The demo runs on a free hosting tier, so the first request after a quiet period can be slow while the service wakes up.
+
+## Try the failure handling
+
+Job execution is **simulated**: handlers wait a few seconds, and any job whose type contains `Fail` throws on purpose. That makes the retry behavior easy to watch.
+
+1. Create a job with `"type": "NormalJob"`. It should move `Pending → Completed` with `attempts: 1`.
+2. Create a job with `"type": "FailJob"`. Poll `GET /api/Jobs/{id}` and watch `attempts` rise while the delay between tries grows. After the last attempt, its status becomes `Failed` and `errors` holds the reason.
+
+## Observability
+
+- **Logs:** structured logs through Serilog.
+- **Metrics:** OpenTelemetry instrumentation exposed at `/metrics` in Prometheus format.
+- **Health:** `/health` for liveness, `/health/ready` to confirm the database is reachable.
+
+## Getting started
+
+### Prerequisites
+
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
+- A PostgreSQL database (a free [Neon](https://neon.tech) database works)
+- A RabbitMQ instance (a free [CloudAMQP](https://www.cloudamqp.com) plan works)
+- Docker Desktop (optional, only for building the container image)
+
+### 1. Clone
+
+```bash
+git clone https://github.com/geep97/JOB-QUEUE-SYSTEM.git
+cd JOB-QUEUE-SYSTEM
+```
+
+### 2. Configure secrets
+
+Never commit connection strings or passwords. Locally, use .NET user secrets:
+
+```bash
 dotnet user-secrets init --project JobQueue/JobQueue.csproj
 
+dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Host=YOUR_HOST;Database=YOUR_DB;Username=YOUR_USER;Password=YOUR_PASSWORD;SSL Mode=Require" --project JobQueue/JobQueue.csproj
+
+dotnet user-secrets set "RabbitMq:Url" "YOUR_RABBITMQ_URL" --project JobQueue/JobQueue.csproj
 ```
 
+In production, use environment variables instead:
 
+| Variable | Description |
+|---|---|
+| `ConnectionStrings__DefaultConnection` | PostgreSQL connection string |
+| `RabbitMq__Url` | RabbitMQ connection URL |
 
-Set the PostgreSQL connection string:
-
-
-
-```bash
-
-dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Host=YOUR\_HOST;Database=YOUR\_DATABASE;Username=YOUR\_USERNAME;Password=YOUR\_PASSWORD;SSL Mode=Require" --project JobQueue/JobQueue.csproj
-
-```
-
-
-
-Set the RabbitMQ URL:
-
-
+### 3. Apply migrations
 
 ```bash
-
-dotnet user-secrets set "RabbitMq:Url" "YOUR\_RABBITMQ\_URL" --project JobQueue/JobQueue.csproj
-
-```
-
-
-
-Replace the placeholders with your own configuration. Never commit passwords, connection strings, or other secrets to Git.
-
-
-
-\### 3. Apply database migrations
-
-
-
-If the EF Core CLI is installed, run:
-
-
-
-```bash
-
 dotnet ef database update --project JobQueue/JobQueue.csproj
-
 ```
 
-
-
-Ensure the configured PostgreSQL database is reachable before applying migrations.
-
-
-
-\### 4. Run the application
-
-
+### 4. Run
 
 ```bash
-
-dotnet restore JobQueue/JobQueue.csproj
-
 dotnet run --project JobQueue/JobQueue.csproj
-
 ```
 
+Swagger is available in the Development environment at `/swagger`.
 
-
-The API will display its local address in the terminal. Swagger and the OpenAPI document are available in the Development environment.
-
-
-
-\### 5. Run the tests
-
-
+### 5. Test
 
 ```bash
-
 dotnet test JobQueue/JobQueue.Tests/JobQueue.Tests.csproj --configuration Release
-
 ```
 
-
-
-\### 6. Build the Docker image
-
-
-
-Run this command from the repository root:
-
-
+### 6. Build the Docker image (optional)
 
 ```bash
-
 docker build -t jobqueue-api -f JobQueue/Dockerfile .
 
+docker run -p 8080:8080 \
+  -e "ConnectionStrings__DefaultConnection=YOUR_POSTGRES_CONNECTION_STRING" \
+  -e "RabbitMq__Url=YOUR_RABBITMQ_URL" \
+  jobqueue-api
 ```
 
-
-
-Run the container with your environment variables configured:
-
-
-
-```bash
-
-docker run -p 8080:8080 \\
-
-&#x20; -e "ConnectionStrings\_\_DefaultConnection=YOUR\_POSTGRES\_CONNECTION\_STRING" \\
-
-&#x20; -e "RabbitMq\_\_Url=YOUR\_RABBITMQ\_URL" \\
-
-&#x20; jobqueue-api
+## Project structure
 
 ```
-
-
-
-Replace the placeholder values before running the container.
-
-
-
-\## Example API Usage
-
-
-
-\### Create a job
-
-
-
-\*\*Request\*\*
-
-
-
-```http
-
-POST /api/Jobs
-
-Content-Type: application/json
-
+JOB-QUEUE-SYSTEM/
+├── .github/workflows/     CI: restore, build, test, Docker build
+└── JobQueue/
+    ├── Controllers/       HTTP layer
+    ├── Services/          business rules and job state changes
+    ├── Workers/           background job processing
+    ├── Data/              EF Core DbContext
+    ├── Migrations/        database schema history
+    ├── Models/  DTOs/     entities and request shapes
+    ├── Dockerfile
+    ├── Program.cs         startup and dependency registration
+    └── JobQueue.Tests/    xUnit tests
 ```
 
+## CI/CD and deployment
 
+- **CI:** GitHub Actions restores dependencies, builds the API, runs the tests, and builds the Docker image on every push and pull request.
+- **Deployment:** the Docker image is deployed to Render, with PostgreSQL on Neon and RabbitMQ on CloudAMQP. All credentials come from environment variables.
 
-```json
+## Known limitations
 
-{
+These are deliberate scope decisions, and they are the next steps.
 
-&#x20; "type": "NormalJob",
+- **No transactional outbox.** Saving the job and publishing its message are two separate steps. If the app crashes between them, the job has no message, and the polling fallback is what rescues it.
+- **Polling still runs** alongside RabbitMQ, so the database is queried regularly even when the broker is working.
+- **Simulated job execution.** Handlers are placeholders, so idempotency is described in the design but not yet exercised by real side effects.
+- **No authentication or rate limiting.** The demo API is public, and Swagger and metrics are exposed for demonstration.
+- **No broker-side dead-letter queue.** Dead-lettering is a database state (`Failed`), not a RabbitMQ dead-letter exchange.
+- **Basic listing.** `GET /api/Jobs` has no pagination or filtering yet.
+- **Free-tier infrastructure.** Cold starts, plus message and connection limits on the free broker plan.
 
-&#x20; "payload": "Email"
+## Roadmap
 
-}
+- [ ] Transactional outbox for reliable publishing
+- [ ] Authentication and rate limiting
+- [ ] Pagination and filtering on job listing
+- [ ] Real job handlers with idempotency keys
+- [ ] Broker-side dead-letter exchange
+- [ ] Integration tests with a real database and broker
 
-```
+## Author
 
-
-
-\*\*Example response — `201 Created`\*\*
-
-
-
-```json
-
-{
-
-&#x20; "id": 1,
-
-&#x20; "type": "NormalJob",
-
-&#x20; "payload": "Email",
-
-&#x20; "status": 0,
-
-&#x20; "attempts": 0,
-
-&#x20; "errors": null,
-
-&#x20; "createdAt": "2026-10-24T15:19:56.6709014Z",
-
-&#x20; "claimedAt": null,
-
-&#x20; "processAfter": "2026-10-24T15:19:56.6709222Z",
-
-&#x20; "rowVersion": "c74bdf9c-8f77-4785-b146-00a1a2d77464"
-
-}
-
-```
-
-
-
-The values above are an example of the API response. Generated IDs, timestamps, and row versions will vary.
-
-
-
-\### Retrieve a job
-
-
-
-```http
-
-GET /api/Jobs/1
-
-```
-
-
-
-\### Retrieve all jobs
-
-
-
-```http
-
-GET /api/Jobs
-
-```
-
-
-
-\### Update job status
-
-
-
-```http
-
-PUT /api/Jobs/1/status
-
-```
-
-
-
-Use Swagger to inspect the required request body and supported status values.
-
-
-
-\## Health Monitoring
-
-
-
-The application exposes health and observability endpoints:
-
-
-
-\- `/health` — checks application health checks.
-
-\- `/health/ready` — verifies database connectivity.
-
-\- `/metrics` — exposes Prometheus-compatible metrics.
-
-
-
-These endpoints help with monitoring the running service and diagnosing connectivity issues.
-
-
-
-\## Continuous Integration
-
-
-
-GitHub Actions runs automated checks when changes are pushed or pull requests are opened. The workflow restores dependencies, builds the API, runs tests, and builds the Docker image.
-
-
-
-\## Deployment
-
-
-
-The API is deployed to Render using Docker. PostgreSQL is hosted on Neon, while RabbitMQ is configured through an environment variable.
-
-
-
-Deployment configuration and credentials should be managed through environment variables rather than committed to the repository.
-
-
-
-\## Future Improvements
-
-
-
-\- Add authentication and authorization.
-
-\- Implement retry policies and dead-letter handling.
-
-\- Add more integration tests for database and message processing.
-
-\- Improve structured error reporting and operational monitoring.
-
-\- Add pagination and filtering for job retrieval.
-
-\- Protect production API documentation where appropriate.
-
-
-
-\## Author
-
-
-
-\*\*Godman Owusu Obeng-Denteh\*\*
-
-
-
-\- \[GitHub](https://github.com/geep97)
-
-\- \[LinkedIn](https://www.linkedin.com/in/godman-od/)
-
-
-
-
-
+**Godman Owusu Obeng-Denteh**
+[GitHub](https://github.com/geep97) · [LinkedIn](https://www.linkedin.com/in/godman-od/)
