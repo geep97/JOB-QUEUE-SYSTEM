@@ -1,8 +1,8 @@
-﻿using Microsoft.AspNetCore.SignalR.Protocol;
+﻿
 
 namespace JobQueue.Models
 {
-    public class Jobs
+    public class Job
     {
 
         public int Id { get; set; }
@@ -17,5 +17,12 @@ namespace JobQueue.Models
         public string? Errors { get; set; }
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+
+
+        public DateTime? ClaimedAt { get; set; }
+        public DateTime ProcessAfter { get; set; } = DateTime.UtcNow;
+
+        public Guid RowVersion { get; set; } = Guid.NewGuid();
     }
 }
