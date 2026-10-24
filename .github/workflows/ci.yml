@@ -28,4 +28,4 @@ jobs:
         run: dotnet test JobQueue/JobQueue.Tests/JobQueue.Tests.csproj --configuration Release
 
       - name: Build Docker image
-        run: docker build -t jobqueue-api -f JobQueue/Dockerfile JobQueue
+        run: docker build -t jobqueue-api -f JobQueue/Dockerfile .
