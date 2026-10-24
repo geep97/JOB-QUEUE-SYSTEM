@@ -14,5 +14,7 @@ namespace JobQueue.Services
 
         Task CleanUpAbandonedJobsAsync(int maxRetries, TimeSpan lockTimeout);
 
+
+        Task <bool> ReleaseJobOnShutdownAsync(int id);
     }
 }

@@ -103,7 +103,6 @@ namespace JobQueue.Services
             return true;
         }
 
-
         public async Task CleanUpAbandonedJobsAsync(int maxRetries, TimeSpan lockTimeout)
         {
             var cutoffTime = DateTime.UtcNow - lockTimeout;
@@ -127,11 +126,42 @@ namespace JobQueue.Services
                 }
                 catch (DbUpdateConcurrencyException)
                 {
-                    // Another worker modified or cleaned this job simultaneously; skip safely
                     _context.Entry(job).State = EntityState.Detached;
                 }
             }
         }
 
+        public async Task<bool> ReleaseJobOnShutdownAsync(int id)
+        {
+            var job = await _context.Jobs.FindAsync(id);
+            if (job == null)
+            {
+                return false;
+            }
+
+            try
+            {
+
+                job.Status = JobStatus.Pending;
+                job.ClaimedAt = null;
+                job.Errors = null;
+                job.ProcessAfter = DateTime.UtcNow;
+
+                if (job.Attempts > 0)
+                {
+                    job.Attempts -= 1;
+                }
+
+                await _context.SaveChangesAsync();
+                return true;
+
+            }
+
+            catch (DbUpdateConcurrencyException)
+            {
+                _context.Entry(job).State = EntityState.Detached;
+                return false;
+            }
+        }
     }
 }
