@@ -6,7 +6,12 @@ using JobQueue.Services;
 using JobQueue.Workers;
 
 
+
 var builder = WebApplication.CreateBuilder(args);
+
+
+
+
 
 
 
@@ -27,10 +32,22 @@ builder.Services.AddSwaggerGen();
 
 builder.Services.AddScoped<IJobsService, JobsService>();
 
+builder.Services.AddScoped<RabbitMqPublisher>();
+
+builder.Services.AddSingleton<RabbitMqConsumer>();
+
+builder.Services.AddSingleton<JobNotificationChannel>();
+
 builder.Services.AddHostedService<JobProcessingWorker>();
 
 
 var app = builder.Build();
+
+
+
+
+
+
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

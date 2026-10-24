@@ -9,9 +9,14 @@ namespace JobQueue.Services
     {
         private readonly JobQueueDbContext _context;
 
-        public JobsService(JobQueueDbContext context)
+        private readonly RabbitMqPublisher _rabbitMqPublisher;
+
+        public JobsService(
+        JobQueueDbContext context,
+        RabbitMqPublisher rabbitMqPublisher)
         {
             _context = context;
+            _rabbitMqPublisher = rabbitMqPublisher;
         }
 
         public async Task<IEnumerable<Job>> GetAllJobsAsync()
@@ -37,6 +42,8 @@ namespace JobQueue.Services
 
             _context.Jobs.Add(job);
             await _context.SaveChangesAsync();
+
+            await _rabbitMqPublisher.PublishJobCreatedAsync(job.Id);
             return job;
         }
 
@@ -49,6 +56,28 @@ namespace JobQueue.Services
                 .Where(j => (j.Status == JobStatus.Pending && DateTime.UtcNow >= j.ProcessAfter && j.Attempts < maxRetries)
                          || (j.Status == JobStatus.InProgress && j.ClaimedAt < cutoffTime && j.Attempts < maxRetries))
                 .OrderBy(j => j.CreatedAt)
+                .FirstOrDefaultAsync();
+        }
+
+        public async Task<Job?> GetJobForProcessingByIdAsync(
+    int id,
+    int maxRetries,
+    TimeSpan lockTimeout)
+        {
+            var cutoffTime = DateTime.UtcNow - lockTimeout;
+
+            return await _context.Jobs
+                .AsNoTracking()
+                .Where(j => j.Id == id &&
+                    (
+                        (j.Status == JobStatus.Pending &&
+                         j.ProcessAfter <= DateTime.UtcNow &&
+                         j.Attempts < maxRetries)
+                        ||
+                        (j.Status == JobStatus.InProgress &&
+                         j.ClaimedAt < cutoffTime &&
+                         j.Attempts < maxRetries)
+                    ))
                 .FirstOrDefaultAsync();
         }
 

@@ -8,18 +8,24 @@ namespace JobQueue.Workers
         private readonly IServiceProvider _serviceProvider;
         private readonly ILogger<JobProcessingWorker> _logger;
         private readonly int _maxRetries;
-        private readonly TimeSpan _lockTimeout = TimeSpan.FromSeconds(10); // Low value for immediate testing of Job 9
+        private readonly TimeSpan _lockTimeout = TimeSpan.FromSeconds(10);
+        private readonly RabbitMqConsumer _rabbitMqConsumer;
+        private readonly JobNotificationChannel _notificationChannel;
 
-        public JobProcessingWorker(IServiceProvider serviceProvider, ILogger<JobProcessingWorker> logger, IConfiguration configuration)
+        public JobProcessingWorker(IServiceProvider serviceProvider, ILogger<JobProcessingWorker> logger, IConfiguration configuration, RabbitMqConsumer rabbitMqConsumer,JobNotificationChannel notificationChannel)
         {
             _serviceProvider = serviceProvider;
             _logger = logger;
             _maxRetries = configuration.GetValue<int>("JobQueueSettings:MaxRetries");
+            _rabbitMqConsumer = rabbitMqConsumer;
+            _notificationChannel = notificationChannel;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             _logger.LogInformation("Job Processing Engine started.");
+
+            var consumerTask = _rabbitMqConsumer.StartAsync(stoppingToken);
 
             while (!stoppingToken.IsCancellationRequested)
             {
@@ -33,7 +39,21 @@ namespace JobQueue.Workers
 
                         await jobsService.CleanUpAbandonedJobsAsync(_maxRetries, _lockTimeout);
 
-                        var pendingJob = await jobsService.GetNextJobForProcessingAsync(_maxRetries, _lockTimeout);
+                        Job? pendingJob = null;
+
+                        
+                        if (_notificationChannel.TryRead(out int notifiedJobId))
+                        {
+                            pendingJob = await jobsService.GetJobForProcessingByIdAsync(
+                                notifiedJobId,
+                                _maxRetries,
+                                _lockTimeout);
+                        }
+
+                       
+                        pendingJob ??= await jobsService.GetNextJobForProcessingAsync(
+                            _maxRetries,
+                            _lockTimeout);
 
                         if (pendingJob != null)
                         {
@@ -107,15 +127,22 @@ namespace JobQueue.Workers
 
                 if (!jobProcessed)
                 {
-                    await Task.Delay(5000, stoppingToken);
-                }
-                else
-                {
+                    using var waitCts =
+                        CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+
+                    waitCts.CancelAfter(TimeSpan.FromSeconds(5));
+
                     try
                     {
-                        await Task.Delay(100, stoppingToken);
+                        await _notificationChannel.WaitToReadAsync(waitCts.Token);
                     }
                     catch (OperationCanceledException)
+                        when (!stoppingToken.IsCancellationRequested)
+                    {
+                        
+                    }
+                    catch (OperationCanceledException)
+                        when (stoppingToken.IsCancellationRequested)
                     {
                         break;
                     }
@@ -127,7 +154,7 @@ namespace JobQueue.Workers
 
         private async Task SimulatedJobExecutor(Job job, CancellationToken cancellationToken)
         {
-            for (int i = 0; i < 3; i++) // 30 seconds processing window simulator
+            for (int i = 0; i < 3; i++) 
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 await Task.Delay(1000, cancellationToken);

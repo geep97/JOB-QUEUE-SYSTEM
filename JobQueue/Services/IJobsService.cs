@@ -16,5 +16,10 @@ namespace JobQueue.Services
 
 
         Task <bool> ReleaseJobOnShutdownAsync(int id);
-    }
+
+        Task<Job?> GetJobForProcessingByIdAsync(
+            int id,
+            int maxRetries,
+            TimeSpan lockTimeout);
+        }
 }
