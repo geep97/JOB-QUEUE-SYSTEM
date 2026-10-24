@@ -1,31 +1,16 @@
 
-name: JobQueue CI
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
 
-on:
-  push:
-  pull_request:
+COPY ["JobQueue.csproj", "./"]
+RUN dotnet restore "JobQueue.csproj"
 
-jobs:
-  build-test-docker:
-    runs-on: ubuntu-latest
+COPY . .
+RUN dotnet publish "JobQueue.csproj" -c Release -o /app/publish /p:UseAppHost=false
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
-
-      - name: Restore dependencies
-        run: dotnet restore JobQueue/JobQueue.csproj
-
-      - name: Build API
-        run: dotnet build JobQueue/JobQueue.csproj --configuration Release --no-restore
-
-      - name: Run tests
-        run: dotnet test JobQueue/JobQueue.Tests/JobQueue.Tests.csproj --configuration Release
-
-      - name: Build Docker image
-        run: docker build -t jobqueue-api -f JobQueue/Dockerfile JobQueue
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
+WORKDIR /app
+COPY --from=build /app/publish .
+ENV ASPNETCORE_URLS=http://+:8080
+EXPOSE 8080
+ENTRYPOINT ["dotnet", "JobQueue.dll"]
