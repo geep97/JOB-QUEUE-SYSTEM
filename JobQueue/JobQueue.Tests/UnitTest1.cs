@@ -18,7 +18,7 @@ public class JobTests
         Assert.Equal(0, job.Attempts);
         Assert.Null(job.Errors);
         Assert.Null(job.ClaimedAt);
-        Assert.Empty(job.RowVersion);
+        Assert.NotEqual(Guid.Empty, job.RowVersion);
 
         Assert.True(job.CreatedAt <= DateTime.UtcNow);
         Assert.True(job.ProcessAfter <= DateTime.UtcNow);
