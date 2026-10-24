@@ -5,12 +5,11 @@ using JobQueue.Services;
 using JobQueue.Workers;
 using Serilog;
 using Microsoft.AspNetCore.Http;
-using System.Diagnostics.Metrics;
 using OpenTelemetry.Metrics;
-
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Serilog configuration
 builder.Host.UseSerilog((context, configuration) =>
     configuration
         .ReadFrom.Configuration(context.Configuration)
@@ -23,31 +22,33 @@ builder.Host.UseSerilog((context, configuration) =>
         )
 );
 
+// Database configuration
 var connectionString = builder.Configuration
     .GetConnectionString("DefaultConnection");
 
 builder.Services.AddDbContext<JobQueueDbContext>(options =>
     options.UseNpgsql(connectionString));
 
+// API services
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 builder.Services.AddSwaggerGen();
 
 builder.Services.AddScoped<IJobsService, JobsService>();
 
+// RabbitMQ services
 builder.Services.AddSingleton<RabbitMqPublisher>();
 builder.Services.AddSingleton<RabbitMqConsumer>();
 builder.Services.AddSingleton<JobNotificationChannel>();
 
+// Background worker
 builder.Services.AddHostedService<JobProcessingWorker>();
 
+// Health checks and metrics
 builder.Services.AddHealthChecks();
 builder.Services.AddMetrics();
 
-var app = builder.Build();
-
-
-
+// OpenTelemetry — must be registered before builder.Build()
 builder.Services.AddOpenTelemetry()
     .WithMetrics(metrics =>
     {
@@ -56,6 +57,9 @@ builder.Services.AddOpenTelemetry()
             .AddRuntimeInstrumentation()
             .AddPrometheusExporter();
     });
+
+// Build application after all service registrations
+var app = builder.Build();
 
 // HTTP request pipeline
 if (app.Environment.IsDevelopment())
@@ -69,10 +73,15 @@ app.UseSerilogRequestLogging();
 
 app.UseHttpsRedirection();
 app.UseAuthorization();
+
+// Endpoints
 app.MapPrometheusScrapingEndpoint();
 app.MapControllers();
 
+// Basic health check
+app.MapHealthChecks("/health");
 
+// Readiness check — verifies database connectivity
 app.MapGet("/health/ready", async (JobQueueDbContext db) =>
 {
     try
