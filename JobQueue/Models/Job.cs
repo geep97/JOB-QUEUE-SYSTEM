@@ -1,5 +1,4 @@
-﻿using Microsoft.AspNetCore.SignalR.Protocol;
-using System.ComponentModel.DataAnnotations;
+﻿
 
 namespace JobQueue.Models
 {
@@ -24,7 +23,6 @@ namespace JobQueue.Models
         public DateTime? ClaimedAt { get; set; }
         public DateTime ProcessAfter { get; set; } = DateTime.UtcNow;
 
-        [Timestamp]
-        public byte[] RowVersion { get; set; } = Array.Empty<byte>();
+        public Guid RowVersion { get; set; } = Guid.NewGuid();
     }
 }
